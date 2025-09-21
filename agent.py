@@ -23,7 +23,7 @@ from langchain_core.runnables import RunnableParallel
 from tools import google_search_tool, scrape_webpage_tool, parse_linkedin_search_results
 
 # Prompts
-from prompts import generate_icp_prompt, strategy_selection_prompt, generate_queries_prompt, filter_search_results_prompt, parse_results_prompt, personalization_prompt
+from prompts import generate_icp_prompt, strategy_selection_prompt, generate_company_queries_prompt, filter_search_results_prompt, parse_results_prompt, personalization_prompt, parse_companies_prompt, generate_person_queries_prompt
 
 llm = init_chat_model(
     "gemini-2.5-flash-lite",
@@ -36,6 +36,7 @@ class AgentState(TypedDict):
     icp: Dict  # Ideal Customer Profile
     strategy: Dict
     search_queries: List[str]
+    company_list: List[str]
     raw_search_results: List[Dict]  # Results from Google API
     prospects: List[Dict]  # Structured prospect data (name, title, company, url)
     personalized_outreach: List[Dict]  # Final output
@@ -87,9 +88,10 @@ def strategy_selection_node(state: AgentState):
     except json.JSONDecodeError:
         print(f"--- ERROR: Failed to parse strategy JSON: {response_content} ---")
         return {"strategy": {"strategy_name": "PERSON_FIRST_LINKEDIN"}}
+        
 
 # Noeud 3
-def generate_queries_node(state: AgentState):
+def generate_company_search_queries_node(state: AgentState):
     """
     Generates search queries. If it's a retry, it uses the error_message
     to generate a different set of queries.
@@ -102,7 +104,7 @@ def generate_queries_node(state: AgentState):
     print(f"--- Search Attempt: {attempts} ---")
 
     response_content = llm.invoke(
-        generate_queries_prompt.format_messages(
+        generate_company_queries_prompt.format_messages(
             icp=state['icp'],
             strategy_name=state['strategy']['strategy_name'],
             product_context=state['product_context'],
@@ -124,6 +126,56 @@ def generate_queries_node(state: AgentState):
     except json.JSONDecodeError:
         print(f"--- ERROR: Failed to parse queries JSON: {response_content} ---")
         return {"search_queries": [], "search_attempts": attempts}
+
+# Add this new node to parse the results
+def parse_companies_node(state: AgentState):
+    """Parses the raw search results to extract a list of company names."""
+    print('-'*50)
+    print("\n--- NODE: Parsing Companies from Search Results ---")
+    
+    response_content = llm.invoke(
+        parse_companies_prompt.format_messages(
+            icp=state['icp'],
+            raw_search_results=json.dumps(state['raw_search_results'], indent=2)
+        )
+    ).content
+    llm_output = remove_json_blocks(response_content)
+
+    try:
+        company_data = json.loads(llm_output)
+        companies = company_data.get("companies", [])
+        print(f"--- Successfully parsed {len(companies)} company names. ---")
+        return {"company_list": companies}
+    except json.JSONDecodeError:
+        print(f"--- ERROR: Failed to parse companies JSON: {response_content} ---")
+        return {"company_list": []}
+
+# Add this new node to generate the final queries
+def generate_person_search_queries_node(state: AgentState):
+    """Generates targeted LinkedIn search queries for people at specific companies."""
+    print('-'*50)
+    print("\n--- NODE: Generating Person Search Queries ---")
+
+    if not state.get('company_list'):
+        print("--- No companies found, skipping person search. ---")
+        return {"search_queries": []}
+
+    response_content = llm.invoke(
+        generate_person_queries_prompt.format_messages(
+            icp=state['icp'],
+            company_list=state['company_list']
+        )
+    ).content
+    llm_output = remove_json_blocks(response_content)
+
+    try:
+        queries_list = json.loads(llm_output)
+        print(f"--- Successfully generated {len(queries_list)} person-specific queries. ---")
+        # Overwrite search_queries for the next search step
+        return {"search_queries": queries_list, "search_attempts": 1} # Reset attempts for this new search phase
+    except json.JSONDecodeError:
+        print(f"--- ERROR: Failed to parse person queries JSON: {response_content} ---")
+        return {"search_queries": []}
 
 
 
@@ -191,6 +243,21 @@ def strategy_routing(state):
         # Fallback to prevent None return
         print(f"Unknown strategy: {strategy_name}, defaulting to person_first")
         return "person_first"
+
+# New router for the second phase of company_first strategy
+def parsing_routing(state):
+    """Decide parsing node based on strategy and whether we have companies already"""
+    strategy_name = state.get("strategy", {}).get("strategy_name")
+    
+    # If we're in company_first strategy and don't have a company list yet, parse companies
+    if strategy_name == "COMPANY_FIRST_LOCAL" and not state.get("company_list"):
+        return "parse_companies"
+    # For person_first strategy, use LinkedIn parsing
+    elif strategy_name == "PERSON_FIRST_LINKEDIN":
+        return "parse_linkedin"
+    # For company_first strategy second phase (parsing people), use LLM parsing
+    else:
+        return "parse_llm"
 
 # Noeud 6.A   
 def parse_linkedin_node(state: AgentState):
@@ -339,13 +406,12 @@ def should_continue_or_retry(state: AgentState):
             print("--- NO PROSPECTS FOUND. RETRYING SEARCH. ---")
             return "retry"
 
-# Build workflow
 workflow = StateGraph(AgentState)
 
 # Add nodes
 workflow.add_node("generate_icp_node", generate_icp_node)
 workflow.add_node("strategy_selection_node", strategy_selection_node)
-workflow.add_node("generate_queries_node", generate_queries_node)
+workflow.add_node("generate_company_search_queries_node", generate_company_search_queries_node)
 workflow.add_node("execute_search_node", execute_search_node)
 workflow.add_node("filter_search_results_node", filter_search_results_node)
 workflow.add_node("parse_linkedin_node", parse_linkedin_node)
@@ -353,28 +419,46 @@ workflow.add_node("parse_llm_node", parse_llm_node)
 workflow.add_node("personalization_node", personalization_node)
 workflow.add_node("deduplicate_prospects_node", deduplicate_prospects_node)
 workflow.add_node("prepare_for_retry_node", prepare_for_retry_node)
+workflow.add_node("parse_companies_node", parse_companies_node)  # NEW
+workflow.add_node("generate_person_search_queries_node", generate_person_search_queries_node)  # NEW
 
 
 # Fixed part
 workflow.add_edge(START, "generate_icp_node")
 workflow.add_edge("generate_icp_node", "strategy_selection_node")
-workflow.add_edge("strategy_selection_node", "generate_queries_node")
-workflow.add_edge("generate_queries_node", "execute_search_node")
-workflow.add_edge("execute_search_node", "filter_search_results_node")
 
-# Conditional parsing
+# Strategy → two possible entry points
 workflow.add_conditional_edges(
-    "filter_search_results_node", 
-    strategy_routing,    
+    "strategy_selection_node",
+    strategy_routing,
     {
-        "person_first": "parse_linkedin_node", 
-        "company_first": "parse_llm_node"
+        "person_first": "generate_company_search_queries_node",  # PERSON_FIRST path
+        "company_first": "generate_company_search_queries_node"   # COMPANY_FIRST path
     }
 )
+
+# Company/person-first search → execute search
+workflow.add_edge("generate_company_search_queries_node", "execute_search_node")
+workflow.add_edge("execute_search_node", "filter_search_results_node")
+
+# Conditional parsing - use the new router
+workflow.add_conditional_edges(
+    "filter_search_results_node", 
+    parsing_routing,    
+    {
+        "parse_linkedin": "parse_linkedin_node",
+        "parse_llm": "parse_llm_node", 
+        "parse_companies": "parse_companies_node"
+    }
+)
+
+# Company-first path continues → generate person queries → new search
+workflow.add_edge("parse_companies_node", "generate_person_search_queries_node")
+workflow.add_edge("generate_person_search_queries_node", "execute_search_node")
+
+# Parsing after person/company search
 workflow.add_edge("parse_linkedin_node", "deduplicate_prospects_node")
 workflow.add_edge("parse_llm_node", "deduplicate_prospects_node")
-
-
 
 # Conditional looping
 workflow.add_conditional_edges(
@@ -387,7 +471,9 @@ workflow.add_conditional_edges(
     }
 )
 
+workflow.add_edge("prepare_for_retry_node", "generate_company_search_queries_node")
 workflow.add_edge("personalization_node", END)
+
 
 # Compile the agent
 agent = workflow.compile()
@@ -403,6 +489,7 @@ initial_state = {
     "messages": [human_message],
     "icp": {},
     "search_queries": {},
+    "company_list": [],
     "raw_search_results": [],
     "prospects": [],
     "personalized_outreach": [],

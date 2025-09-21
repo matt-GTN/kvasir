@@ -198,3 +198,82 @@ personalization_prompt = ChatPromptTemplate.from_template(
     }}
     """
 )
+
+generate_company_queries_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are an expert market researcher. Your task is to generate a list of 5-7 Google search queries to find lists of companies that are a perfect fit for the given Ideal Customer Profile (ICP) and product context.
+
+**Your Goal:** Generate queries that will find articles, directories, blog posts, and market reports listing multiple potential customer companies. Do NOT generate queries to find individuals yet.
+
+**Good Query Examples:**
+- "Top US-based SaaS companies with 50-200 employees"
+- "Fastest growing FinTech startups in the United States 2024"
+- "List of e-commerce companies using React for their storefront"
+- "Inc 5000 list technology sector"
+
+**Bad Query Examples (DO NOT DO THIS):**
+- "site:linkedin.com/in/ 'CTO' 'SaaS'"
+- "CEO of tech companies"
+
+**Instructions:**
+1.  Analyze the ICP and product context.
+2.  Brainstorm 5-7 creative and effective search queries to find lists of companies.
+3.  Return the queries as a JSON list of strings.
+
+**Product Context:**
+{product_context}
+
+**Ideal Customer Profile (ICP):**
+{icp}
+"""),
+    ("user", "Please generate the company search queries based on the provided context and ICP."),
+])
+
+parse_companies_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are a data parsing expert. Your task is to read through a list of Google search results and extract a clean list of company names that are relevant to the provided ICP.
+
+**Instructions:**
+1.  Carefully review each search result's title and snippet.
+2.  Identify and extract the names of companies mentioned.
+3.  Ignore individuals, articles without company names, and irrelevant entries.
+4.  Deduplicate the list of company names.
+5.  Return a single JSON object with a key "companies" containing a list of the extracted company names.
+
+**Example Output:**
+{{
+  "companies": [
+    "Stripe",
+    "Plaid",
+    "Brex",
+    "Ramp"
+  ]
+}}
+
+**Ideal Customer Profile (for context):**
+{icp}
+
+**Raw Google Search Results:**
+{raw_search_results}
+"""),
+    ("user", "Please parse the search results and extract the company names."),
+])
+
+generate_person_queries_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are an expert in LinkedIn search. Your task is to generate a series of targeted Google search queries to find specific decision-makers (personas) within a given list of companies.
+
+**Instructions:**
+1.  Look at the `key_personas` from the ICP. Extract their titles (e.g., "CTO", "Head of Product").
+2.  For each company in the `company_list`, create a search query for each key persona.
+3.  Use boolean operators like "OR" to combine similar titles (e.g., "CTO OR 'Chief Technology Officer' OR 'VP of Engineering'").
+4.  Combine all generated queries into a single JSON list of strings.
+
+**Ideal Customer Profile (ICP):**
+{icp}
+
+**List of Target Companies:**
+{company_list}
+"""),
+    ("user", "Please generate the person-specific LinkedIn search queries."),
+])

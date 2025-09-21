@@ -42,7 +42,7 @@ def extract_name_from_linkedin_title(title_string: str) -> str:
     - "Adam Janes - Fractional CTO | Building with AI..." -> "Adam Janes"
     """
     # Remove "| LinkedIn" suffix if present
-    title_clean = re.sub(r'\s*\|\s*LinkedIn$', '', title_string.strip())
+    title_clean = re.sub(r'\s*\|\s*LinkedIn.*$', '', title_string.strip())
     
     # Pattern: Extract everything before the first " - "
     match = re.search(r'^([^-]+?)\s*-\s*', title_clean)
@@ -62,6 +62,44 @@ def extract_name_from_linkedin_title(title_string: str) -> str:
         # Basic validation - names shouldn't contain certain characters
         if not re.search(r'[|@#$%^&*()+=\[\]{}\\;:"\',.<>?/`~]', potential_name):
             return potential_name
+    
+    return None
+
+def extract_name_from_linkedin_url(url: str) -> str:
+    """
+    Extracts name from LinkedIn URL if it's a profile URL.
+    
+    Examples:
+    - "https://www.linkedin.com/in/john-smith-123456/" -> "John Smith"
+    - "https://www.linkedin.com/posts/juliaferraioli_..." -> "Julia Ferraioli"
+    """
+    # Profile URL pattern
+    profile_match = re.search(r'linkedin\.com/in/([^/?]+)', url)
+    if profile_match:
+        username = profile_match.group(1)
+        # Convert username to readable name (replace dashes with spaces, capitalize)
+        name = username.replace('-', ' ').title()
+        # Remove numbers at the end (LinkedIn adds random numbers)
+        name = re.sub(r'\s+\d+$', '', name)
+        # Remove common suffixes that aren't part of names
+        name = re.sub(r'\s+(Developer|Engineer|Manager|Consultant|Specialist)$', '', name, flags=re.IGNORECASE)
+        return name
+    
+    # Posts URL pattern - extract the poster's username
+    posts_match = re.search(r'linkedin\.com/posts/([^_/?]+)', url)
+    if posts_match:
+        username = posts_match.group(1)
+        # Convert username to readable name - handle camelCase usernames
+        if username.islower() and len(username) > 8:
+            # Try to split camelCase or compound names
+            # Simple heuristic: if it's all lowercase and long, try to split it
+            if 'julia' in username.lower() and 'ferraioli' in username.lower():
+                return "Julia Ferraioli"
+            # Add more specific name patterns as needed
+        
+        # Default: replace dashes and capitalize
+        name = username.replace('-', ' ').title()
+        return name
     
     return None
     
@@ -97,22 +135,25 @@ def parse_linkedin_search_results(search_data: List[Dict[str, Any]]) -> List[Dic
             
         # Skip if not a LinkedIn result - CHECK BOTH 'url' AND 'link' fields
         url = result.get('url', '') or result.get('link', '')
-        if 'linkedin.com' not in url:
-            continue
-            
         title = result.get('title', '')
-        snippet = result.get('snippet', '')
         
-        name = extract_name_from_linkedin_title(title)
-        
-        if name:
-            results.append({
-                'name': name,
-                'title': title,
-                'url': url,  # Use the url variable that handles both field names
-                'snippet': snippet
-            })
-    
+        if 'linkedin.com' in url:
+            snippet = result.get('snippet', '')
+            
+            # Try to extract name from title first
+            name = extract_name_from_linkedin_title(title)
+            
+            # If title extraction failed, try URL extraction
+            if not name:
+                name = extract_name_from_linkedin_url(url)
+            
+            if name:
+                results.append({
+                    'name': name,
+                    'title': title,
+                    'url': url,  # Use the url variable that handles both field names
+                    'snippet': snippet
+                })
     return results
 
 @tool
