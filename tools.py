@@ -2,6 +2,7 @@ import os
 from langchain_core.tools import tool
 from googleapiclient.discovery import build
 import re
+from typing import Dict, List, Any
 import requests
 from bs4 import BeautifulSoup
 
@@ -31,24 +32,88 @@ def google_search_tool(query: str) -> list[dict]:
     except Exception as e:
         print(f"Error during Google search: {e}")
         return [{"error": f"An error occurred: {e}"}]
+
+def extract_name_from_linkedin_title(title_string: str) -> str:
+    """
+    Extracts name from LinkedIn title string.
     
-@tool
-def parse_linkedin_title(title_string: str) -> dict:
+    Examples:
+    - "Bill Huang - Full-Stack Developer | SaaS Expert..." -> "Bill Huang"
+    - "Adam Janes - Fractional CTO | Building with AI..." -> "Adam Janes"
     """
-    Parses a LinkedIn title string to extract name and title.
-    Returns a dictionary with 'name' and 'title' or None if it fails.
-    """
-    # Pattern: (Anything before the dash) - (Anything after the dash until a | or the end)
-    match = re.search(r'^(.*?) - (.*?)(?: \| LinkedIn)?$', title_string.strip())
+    # Remove "| LinkedIn" suffix if present
+    title_clean = re.sub(r'\s*\|\s*LinkedIn$', '', title_string.strip())
+    
+    # Pattern: Extract everything before the first " - "
+    match = re.search(r'^([^-]+?)\s*-\s*', title_clean)
     
     if match:
         name = match.group(1).strip()
-        title = match.group(2).strip()
-        # Clean up trailing dots often added by Google
-        if title.endswith('...'):
-            title = title[:-3].strip()
-        return {"name": name, "title": title}
+        # Clean up any remaining artifacts
+        name = re.sub(r'\s+', ' ', name)  # Normalize whitespace
+        return name
+    
+    # Fallback: if no dash found, try to extract from beginning
+    # This handles edge cases where format might be different
+    words = title_clean.split()
+    if len(words) >= 2:
+        # Assume first two words are likely the name
+        potential_name = ' '.join(words[:2])
+        # Basic validation - names shouldn't contain certain characters
+        if not re.search(r'[|@#$%^&*()+=\[\]{}\\;:"\',.<>?/`~]', potential_name):
+            return potential_name
+    
     return None
+    
+@tool
+def parse_linkedin_search_results(search_data: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    Parses nested search results structure (like from your document).
+    
+    Args:
+        search_data: Dictionary containing search results (could have nested structure)
+        
+    Returns:
+        List of dictionaries with 'name', 'title', 'url', and 'snippet'
+    """
+    results = []
+    
+    # Handle case where results might be nested
+    if isinstance(search_data, list):
+        search_results = search_data
+    elif isinstance(search_data, dict) and 'results' in search_data:
+        search_results = search_data['results']
+    else:
+        # Try to find results in the data structure
+        search_results = search_data
+        
+    # If it's still not a list, try to extract from common patterns
+    if not isinstance(search_results, list):
+        return results
+    
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+            
+        # Skip if not a LinkedIn result - CHECK BOTH 'url' AND 'link' fields
+        url = result.get('url', '') or result.get('link', '')
+        if 'linkedin.com' not in url:
+            continue
+            
+        title = result.get('title', '')
+        snippet = result.get('snippet', '')
+        
+        name = extract_name_from_linkedin_title(title)
+        
+        if name:
+            results.append({
+                'name': name,
+                'title': title,
+                'url': url,  # Use the url variable that handles both field names
+                'snippet': snippet
+            })
+    
+    return results
 
 @tool
 def scrape_webpage_tool(url: str) -> str:
