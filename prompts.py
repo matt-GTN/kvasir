@@ -82,11 +82,17 @@ generate_queries_prompt = ChatPromptTemplate.from_template(
     **Ideal Customer Profile (ICP):** {icp}
     **Product Context:** {product_context}
 
+    ---
+    **Feedback on Previous Attempt (if any):**
+    {error_message}
+    ---
+
     **Instructions:**
-    - The queries should be designed to find potential direct sales channels, distributors, partners, or end-users as described by the ICP and relevant to the Product Context.
-    - **IF the strategy is "PERSON_FIRST_LINKEDIN"**: Generate queries that use the `site:linkedin.com/in/` operator to find specific job titles/personas in relevant industries, deriving details from the ICP and Product Context.
-    - **IF the strategy is "COMPANY_FIRST_LOCAL"**: Generate general web search queries to find the businesses themselves. DO NOT use `site:linkedin.com/in/`. Focus on finding commercial entities (stores, agencies, platforms, service providers) by combining business types, keywords related to the Product Context, and geographic locations from the ICP.
-    - Ensure queries are precise enough to target commercial entities, avoiding general informational sites, news articles, tourism boards, or directories.
+    - The queries should be designed to find potential direct sales channels, distributors, partners, or end-users.
+    - **If feedback is provided above, you MUST generate a completely new and different set of queries to avoid repeating the previous failure.** Think about using different keywords, broader industries, or alternative job titles.
+    - **IF the strategy is "PERSON_FIRST_LINKEDIN"**: Generate queries that use the `site:linkedin.com/in/` operator...
+    - **IF the strategy is "COMPANY_FIRST_LOCAL"**: Generate general web search queries...
+    - Ensure queries are precise enough to target commercial entities...
 
     Output the result as a clean JSON array of strings.
     """

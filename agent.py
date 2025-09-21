@@ -4,7 +4,7 @@ import os
 load_dotenv()
 
 # Utilities
-from typing import List, Dict, TypedDict
+from typing import List, Dict, TypedDict, Literal
 from typing_extensions import TypedDict, Annotated
 import json
 import operator
@@ -12,6 +12,7 @@ from utils import remove_json_blocks
 from concurrent.futures import ThreadPoolExecutor
 
 # Langchain
+from langgraph.graph import StateGraph, START, END
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AnyMessage
 from langchain_core.messages import SystemMessage
@@ -40,6 +41,8 @@ class AgentState(TypedDict):
     personalized_outreach: List[Dict]  # Final output
     messages: Annotated[list[AnyMessage], operator.add]  # Add messages to your state
     llm_calls: int
+    search_attempts: int  # To count how many times we've tried to search
+    error_message: str    # To provide feedback on what went wrong
 
 
 
@@ -88,32 +91,39 @@ def strategy_selection_node(state: AgentState):
 # Noeud 3
 def generate_queries_node(state: AgentState):
     """
-    Generates search queries based on the chosen strategy and ICP.
+    Generates search queries. If it's a retry, it uses the error_message
+    to generate a different set of queries.
     """
     print('-'*50)
     print("\n--- NODE: Generating Queries ---")
 
-    print(f"--- Generating queries for strategy: {state['strategy']['strategy_name']} ---")
+    # Increment the attempt counter each time this node runs
+    attempts = state.get('search_attempts', 0) + 1
+    print(f"--- Search Attempt: {attempts} ---")
 
     response_content = llm.invoke(
         generate_queries_prompt.format_messages(
-            icp=state['icp'], 
+            icp=state['icp'],
             strategy_name=state['strategy']['strategy_name'],
-            product_context=state['product_context']
+            product_context=state['product_context'],
+            # Pass the error message to the prompt
+            error_message=state.get('error_message', '')
         )
     ).content
     llm_output = remove_json_blocks(response_content)
-    
+
     try:
         queries_list = json.loads(llm_output)
         print(f"--- Successfully generated and parsed {len(queries_list)} queries. ---")
         for query in queries_list:
             print(query)
         
-        return {"search_queries": queries_list}
+        # Update state with the new queries and the incremented attempt count
+        # Also, clear the error message so it's not used in the next loop if this one succeeds
+        return {"search_queries": queries_list, "search_attempts": attempts, "error_message": ""}
     except json.JSONDecodeError:
         print(f"--- ERROR: Failed to parse queries JSON: {response_content} ---")
-        return {"search_queries": []}
+        return {"search_queries": [], "search_attempts": attempts}
 
 
 
@@ -167,7 +177,8 @@ def filter_search_results_node(state: AgentState):
     except json.JSONDecodeError:
         print(f"--- ERROR: Failed to parse filtered results JSON: {response_content} ---")
         return {"raw_search_results": []}
-        
+
+# Routeur de stratégie
 def strategy_routing(state):
     """Decide parsing node based on the strategy"""
     strategy_name = state.get("strategy", {}).get("strategy_name")
@@ -244,38 +255,89 @@ def deduplicate_prospects_node(state: AgentState):
 
 # Noeud 8
 def personalization_node(state: AgentState):
+    """
+    Generates personalized outreach content by scraping prospect URLs in parallel
+    and then calling the LLM in a single batch operation.
+    """
     print('-'*50)
-    print("\n--- NODE: Generating Personalized Outreach ---")
+    print("\n--- NODE: Generating Personalized Outreach (Optimized) ---")
     prospects = state['prospects']
-    outreach_list = []  # ✅ Initialize the list
+    product_context = state['product_context']
     
-    # Process each prospect individually for now
-    for prospect in prospects:
-        content = scrape_webpage_tool.invoke({"url": prospect['url']})
-        prompt = personalization_prompt.format_messages(
-                product_context=state['product_context'], 
-                prospect_name=prospect['name'],
-                prospect_title=prospect['title'],
-                prospect_url=prospect['url'],
-                researched_content=content
-        )
+    print(f"--- Researching {len(prospects)} prospects in parallel... ---")
+    
+    # We use a ThreadPoolExecutor to run the scrape_webpage_tool on multiple threads.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        # Create a list of URLs to scrape
+        urls_to_scrape = [prospect['url'] for prospect in prospects]
+        # map() runs the tool for each URL and returns the results in the same order.
+        scraped_contents = list(executor.map(lambda url: scrape_webpage_tool.invoke({"url": url}), urls_to_scrape))
+    
+    print("--- Preparing prompts for batch LLM call... ---")
+    all_prompts = []
+    for i, prospect in enumerate(prospects):
+        # Match the scraped content to the correct prospect
+        researched_content = scraped_contents[i]
         
-        result = llm.invoke(prompt)
+        # If scraping failed for a prospect, we can skip them or use a default.
+        if "Error fetching URL" in researched_content:
+            print(f"--- WARNING: Skipping personalization for {prospect['name']} due to scraping error. ---")
+            continue
+
+        # Format the prompt with the successfully scraped content
+        prompt = personalization_prompt.format_messages(
+            product_context=product_context, 
+            prospect_name=prospect['name'],
+            prospect_title=prospect['title'],
+            prospect_url=prospect['url'],
+            researched_content=researched_content
+        )
+        all_prompts.append(prompt)
+
+    # --- Step 3: Execute a single batch LLM call ---
+    print(f"--- Executing batch LLM call for {len(all_prompts)} prompts... ---")
+    batch_results = llm.batch(all_prompts)
+    
+    # --- Step 4: Process the results ---
+    outreach_list = []
+    for i, result in enumerate(batch_results):
         llm_output = remove_json_blocks(result.content)
+        
+        # We need to find the original prospect that this result corresponds to
+        original_prospect = prospects[i] 
         
         try:
             recommendations = json.loads(llm_output)
             outreach_list.append({
-                "prospect": prospect,
+                "prospect": original_prospect,
                 "recommendations": recommendations
             })
         except json.JSONDecodeError:
-            print(f"--- ERROR: Failed to parse personalization for {prospect['name']} ---")
-    
+            print(f"--- ERROR: Failed to parse personalization for {original_prospect['name']} ---")
+            
+    print(f"--- Successfully generated {len(outreach_list)} personalized outreach messages. ---")
     return {"personalized_outreach": outreach_list}
 
-from typing import Literal
-from langgraph.graph import StateGraph, START, END
+# Noeud 9
+def prepare_for_retry_node(state: AgentState):
+    """Updates the error_message in the state to guide the next query generation attempt."""
+    error_message = "The previous set of search queries did not yield any viable prospects after filtering. Please generate a new and different set of queries, perhaps by targeting adjacent industries or using broader keywords."
+    return {"error_message": error_message}
+
+# Routeur d'erreurs
+def should_continue_or_retry(state: AgentState):
+    """Router to decide whether to continue, retry the search, or end the process."""
+    if len(state['prospects']) > 0:
+        print(f"--- {len(state['prospects'])} prospects found. Proceeding to personalization. ---")
+        return "continue"
+    else:
+        # Check if we have exceeded the max number of retries
+        if state.get('search_attempts', 0) >= 3:
+            print("--- MAX SEARCH ATTEMPTS REACHED. ENDING RUN. ---")
+            return "end"
+        else:
+            print("--- NO PROSPECTS FOUND. RETRYING SEARCH. ---")
+            return "retry"
 
 # Build workflow
 workflow = StateGraph(AgentState)
@@ -290,6 +352,7 @@ workflow.add_node("parse_linkedin_node", parse_linkedin_node)
 workflow.add_node("parse_llm_node", parse_llm_node)
 workflow.add_node("personalization_node", personalization_node)
 workflow.add_node("deduplicate_prospects_node", deduplicate_prospects_node)
+workflow.add_node("prepare_for_retry_node", prepare_for_retry_node)
 
 
 # Fixed part
@@ -311,8 +374,19 @@ workflow.add_conditional_edges(
 workflow.add_edge("parse_linkedin_node", "deduplicate_prospects_node")
 workflow.add_edge("parse_llm_node", "deduplicate_prospects_node")
 
-# Fixed end
-workflow.add_edge("deduplicate_prospects_node", "personalization_node")
+
+
+# Conditional looping
+workflow.add_conditional_edges(
+    "deduplicate_prospects_node",
+    should_continue_or_retry,
+    {
+        "continue": "personalization_node",
+        "retry": "prepare_for_retry_node",
+        "end": END
+    }
+)
+
 workflow.add_edge("personalization_node", END)
 
 # Compile the agent
@@ -332,7 +406,10 @@ initial_state = {
     "raw_search_results": [],
     "prospects": [],
     "personalized_outreach": [],
-    "llm_calls": 0
+    "llm_calls": 0,
+    "search_attempts": 0,
+    "error_message": ""
+
 }
 
 # Invoke the agent
@@ -341,7 +418,7 @@ result = agent.invoke(initial_state)
 print('-'*50)
 print('\n')
 for outreach in result['personalized_outreach']:
-    print(f'Result: {outreach}')
+    print(json.dumps(outreach, indent=2))
     print('\n')
     print('-'*50)
     print('\n')
