@@ -1,0 +1,158 @@
+{
+  "sources": {
+    "google_search": {
+      "platform": "google_search",
+      "priority": 8,
+      "max_results": 50,
+      "search_parameters": {},
+      "rate_limit_delay": 1.0,
+      "enabled": true
+    },
+    "twitter": {
+      "platform": "twitter",
+      "priority": 7,
+      "max_results": 100,
+      "search_parameters": {
+        "verified_only": false,
+        "min_followers": 50
+      },
+      "rate_limit_delay": 2.0,
+      "enabled": true
+    },
+    "github": {
+      "platform": "github",
+      "priority": 6,
+      "max_results": 50,
+      "search_parameters": {
+        "sort": "stars",
+        "order": "desc"
+      },
+      "rate_limit_delay": 1.0,
+      "enabled": true
+    },
+    "reddit": {
+      "platform": "reddit",
+      "priority": 5,
+      "max_results": 75,
+      "search_parameters": {
+        "sort": "hot",
+        "time_filter": "month"
+      },
+      "rate_limit_delay": 1.5,
+      "enabled": true
+    },
+    "stack_overflow": {
+      "platform": "stack_overflow",
+      "priority": 6,
+      "max_results": 50,
+      "search_parameters": {
+        "min_reputation": 500,
+        "sort": "votes"
+      },
+      "rate_limit_delay": 1.0,
+      "enabled": true
+    },
+    "hacker_news": {
+      "platform": "hacker_news",
+      "priority": 5,
+      "max_results": 40,
+      "search_parameters": {},
+      "rate_limit_delay": 1.0,
+      "enabled": true
+    },
+    "product_hunt": {
+      "platform": "product_hunt",
+      "priority": 4,
+      "max_results": 30,
+      "search_parameters": {
+        "featured_only": false
+      },
+      "rate_limit_delay": 1.5,
+      "enabled": true
+    },
+    "crunchbase": {
+      "platform": "crunchbase",
+      "priority": 6,
+      "max_results": 25,
+      "search_parameters": {
+        "funding_stages": [
+          "seed",
+          "series-a",
+          "series-b"
+        ]
+      },
+      "rate_limit_delay": 3.0,
+      "enabled": true
+    },
+    "medium": {
+      "platform": "medium",
+      "priority": 4,
+      "max_results": 40,
+      "search_parameters": {},
+      "rate_limit_delay": 1.5,
+      "enabled": true
+    },
+    "eventbrite": {
+      "platform": "eventbrite",
+      "priority": 3,
+      "max_results": 30,
+      "search_parameters": {},
+      "rate_limit_delay": 2.0,
+      "enabled": true
+    },
+    "meetup": {
+      "platform": "meetup",
+      "priority": 3,
+      "max_results": 30,
+      "search_parameters": {},
+      "rate_limit_delay": 2.0,
+      "enabled": true
+    },
+    "youtube": {
+      "platform": "youtube",
+      "priority": 4,
+      "max_results": 40,
+      "search_parameters": {},
+      "rate_limit_delay": 1.5,
+      "enabled": false
+    },
+    "discord": {
+      "platform": "discord",
+      "priority": 3,
+      "max_results": 25,
+      "search_parameters": {},
+      "rate_limit_delay": 2.0,
+      "enabled": false
+    },
+    "substack": {
+      "platform": "substack",
+      "priority": 3,
+      "max_results": 30,
+      "search_parameters": {},
+      "rate_limit_delay": 1.5,
+      "enabled": false
+    },
+    "angellist": {
+      "platform": "angellist",
+      "priority": 4,
+      "max_results": 25,
+      "search_parameters": {},
+      "rate_limit_delay": 2.0,
+      "enabled": false
+    },
+    "job_boards": {
+      "platform": "job_boards",
+      "priority": 5,
+      "max_results": 50,
+      "search_parameters": {
+        "boards": [
+          "linkedin",
+          "indeed",
+          "glassdoor"
+        ]
+      },
+      "rate_limit_delay": 3.0,
+      "enabled": true
+    }
+  }
+}
